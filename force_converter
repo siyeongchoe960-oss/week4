@@ -1,0 +1,466 @@
+"""재료역학 1학기 범위의 기본 응력 계산 CLI 프로그램."""
+
+import math
+import tkinter as tk
+import unicodedata
+from tkinter import ttk
+
+
+FORCE_UNITS = {"mN": 0.001, "N": 1.0, "kN": 1000.0, "MN": 1000000.0}
+LENGTH_UNITS = {"mm": 0.001, "m": 1.0}
+AREA_UNITS = {"mm2": 0.000001, "m2": 1.0}
+MOMENT_UNITS = {"N.m": 1.0, "kN.m": 1000.0, "N.mm": 0.001}
+PRESSURE_UNITS = {"Pa": 1.0, "kPa": 1000.0, "MPa": 1000000.0}
+MODULUS_UNITS = {"Pa": 1.0, "GPa": 1000000000.0, "MPa": 1000000.0}
+MAX_ABS_VALUE = 1e15
+
+
+def convert_force(value, from_unit, to_unit):
+	"""힘의 값을 N을 기준으로 출발 단위에서 도착 단위로 변환한다."""
+	if from_unit not in FORCE_UNITS or to_unit not in FORCE_UNITS:
+		raise ValueError("지원하지 않는 단위입니다.")
+	return value * FORCE_UNITS[from_unit] / FORCE_UNITS[to_unit]
+
+
+def positive(value, name):
+	"""물리적으로 양수여야 하는 값을 검사한다."""
+	if value <= 0:
+		raise ValueError("{}은(는) 양수여야 합니다.".format(name))
+	return value
+
+
+def calculate_axial_stress(force, area):
+	"""축응력 sigma=P/A를 계산한다."""
+	if area == 0:
+		raise ValueError("단면적은 0일 수 없습니다.")
+	return force / area
+
+
+def calculate_bending_stress(moment, section_modulus):
+	"""굽힘응력 sigma=M/Z를 계산한다."""
+	if section_modulus == 0:
+		raise ValueError("단면계수는 0일 수 없습니다.")
+	return moment / section_modulus
+
+
+def calculate_torsion_stress(torque, polar_section_modulus):
+	"""비틀림 전단응력 tau=T/Zp를 계산한다."""
+	if polar_section_modulus == 0:
+		raise ValueError("극단면계수는 0일 수 없습니다.")
+	return torque / polar_section_modulus
+
+
+def calculate_torsion_angle(torque, length, shear_modulus, polar_inertia):
+	"""비틀림 회전각을 rad로 계산한다."""
+	if shear_modulus == 0 or polar_inertia == 0:
+		raise ValueError("탄성계수와 극단면2차모멘트는 0일 수 없습니다.")
+	return torque * length / (shear_modulus * polar_inertia)
+
+
+def calculate_pipe_pressure(pressure, radius, thickness):
+	"""얇은 원통의 원주방향 및 길이방향 압력응력을 계산한다."""
+	if radius == 0 or thickness == 0:
+		raise ValueError("반지름과 두께는 0일 수 없습니다.")
+	return pressure * radius / thickness, pressure * radius / (2 * thickness)
+
+
+def normalize_text(text):
+	"""한글 입력과 단위 입력의 표기 차이를 줄인다."""
+	return unicodedata.normalize("NFKC", text.strip())
+
+
+def ask_text(prompt):
+	while True:
+		value = normalize_text(input(prompt))
+		if value:
+			return value
+		print("입력값을 비워 둘 수 없습니다.")
+
+
+def ask_number(prompt):
+	while True:
+		raw = normalize_text(input(prompt))
+		try:
+			value = float(raw)
+			if not math.isfinite(value) or abs(value) > MAX_ABS_VALUE:
+				raise ValueError
+			return value
+		except ValueError:
+			print("숫자가 아니거나 너무 큰 값입니다. 다시 입력해 주세요.")
+
+
+def ask_positive(prompt, name):
+	while True:
+		try:
+			return positive(ask_number(prompt), name)
+		except ValueError as error:
+			print("입력 오류: {}".format(error))
+
+
+def ask_unit(prompt, units):
+	while True:
+		unit = ask_text(prompt)
+		if unit in units:
+			return unit
+		print("지원 단위: {}".format(", ".join(units)))
+
+
+def ask_value_with_unit(prompt, units, name, require_positive=False, example="10 mm"):
+	while True:
+		raw = normalize_text(input("{} (예: {}): ".format(prompt, example)))
+		parts = raw.split()
+		if len(parts) == 2:
+			number_text, unit = parts
+		else:
+			number_text, unit = "", ""
+			for candidate in sorted(units, key=len, reverse=True):
+				if raw.endswith(candidate):
+					number_text = raw[:-len(candidate)].strip()
+					unit = candidate
+					break
+		if not number_text or unit not in units:
+			print("숫자와 단위를 함께 입력해 주세요. 지원 단위: {}".format(", ".join(units)))
+			continue
+		try:
+			value = float(number_text)
+			if not math.isfinite(value) or abs(value) > MAX_ABS_VALUE:
+				raise ValueError
+			if require_positive:
+				if value <= 0:
+					raise ValueError("{}은(는) 0보다 커야 합니다. 다시 입력해 주세요.".format(name))
+				positive(value, name)
+			return value * units[unit]
+		except ValueError as error:
+			print("입력 오류: {}".format(error))
+
+
+def ask_force(prompt):
+	return ask_value_with_unit(prompt, FORCE_UNITS, prompt, example="-100 kN")
+
+
+def ask_moment(prompt):
+	unit = ask_unit("{} 단위 (N.m/kN.m/N.mm): ".format(prompt), MOMENT_UNITS)
+	return ask_number("{} ({}): ".format(prompt, unit)) * MOMENT_UNITS[unit]
+
+
+def ask_modulus(prompt):
+	unit = ask_unit("{} 단위 (Pa/MPa/GPa): ".format(prompt), MODULUS_UNITS)
+	return ask_positive("{} ({}): ".format(prompt, unit), prompt) * MODULUS_UNITS[unit]
+
+
+def ask_shape():
+	print("단면 형상: 1. 직사각형  2. 중실원형  3. 중공 원형  4. 직접입력")
+	while True:
+		shape = ask_text("선택: ")
+		if shape in ("1", "2", "3", "4"):
+			return shape
+		print("1부터 4까지 선택해 주세요.")
+
+
+def section_properties():
+	shape = ask_shape()
+	if shape == "1":
+		width = ask_positive("폭 b: ", "폭")
+		height = ask_positive("높이 h: ", "높이")
+		width *= LENGTH_UNITS[ask_unit("폭 단위 (mm/m): ", LENGTH_UNITS)]
+		height *= LENGTH_UNITS[ask_unit("높이 단위 (mm/m): ", LENGTH_UNITS)]
+		area = width * height
+		inertia = width * height ** 3 / 12
+		polar = width * height * (width ** 2 + height ** 2) / 12
+		c = height / 2
+	elif shape == "2":
+		diameter = ask_value_with_unit("직경 d", LENGTH_UNITS, "직경", True, "20 mm")
+		area = math.pi * diameter ** 2 / 4
+		inertia = math.pi * diameter ** 4 / 64
+		polar = math.pi * diameter ** 4 / 32
+		c = diameter / 2
+	elif shape == "3":
+		outer = ask_value_with_unit("바깥 직경 Do", LENGTH_UNITS, "바깥 직경", True, "30 mm")
+		inner = ask_value_with_unit("안 직경 Di", LENGTH_UNITS, "안 직경", True, "20 mm")
+		if inner >= outer:
+			raise ValueError("안 직경은 바깥 직경보다 작아야 합니다.")
+		area = math.pi * (outer ** 2 - inner ** 2) / 4
+		inertia = math.pi * (outer ** 4 - inner ** 4) / 64
+		polar = math.pi * (outer ** 4 - inner ** 4) / 32
+		c = outer / 2
+	else:
+		area = ask_positive("단면적: ", "단면적")
+		area *= AREA_UNITS[ask_unit("단면적 단위 (mm2/m2): ", AREA_UNITS)]
+		inertia = ask_positive("단면2차모멘트: ", "단면2차모멘트")
+		inertia *= LENGTH_UNITS[ask_unit("단면2차모멘트 길이 단위 (mm/m): ", LENGTH_UNITS)] ** 4
+		polar = ask_positive("극단면2차모멘트: ", "극단면2차모멘트")
+		polar *= LENGTH_UNITS[ask_unit("극단면2차모멘트 길이 단위 (mm/m): ", LENGTH_UNITS)] ** 4
+		c = ask_positive("중립축에서 바깥 섬유까지 거리 c: ", "거리 c")
+		c *= LENGTH_UNITS[ask_unit("거리 c 단위 (mm/m): ", LENGTH_UNITS)]
+	return area, inertia, polar, c
+
+
+def print_stress(value, label):
+	print("{}: {:.6g} MPa".format(label, value / 1000000))
+
+
+def axial_menu():
+	force = ask_force("축력 P")
+	area, _, _, _ = section_properties()
+	stress = calculate_axial_stress(force, area)
+	print_stress(abs(stress), "인장" if force > 0 else "압축" if force < 0 else "응력")
+
+
+def bending_menu():
+	moment = ask_moment("굽힘모멘트 M")
+	_, inertia, _, c = section_properties()
+	stress = calculate_bending_stress(moment * c, inertia)
+	print_stress(abs(stress), "인장" if moment > 0 else "압축" if moment < 0 else "응력")
+
+
+def torsion_menu():
+	torque = ask_moment("토크 T")
+	_, _, polar, c = section_properties()
+	stress = calculate_torsion_stress(torque * c, polar)
+	print_stress(abs(stress), "비틀림 전단응력")
+	length = ask_positive("축 길이: ", "축 길이")
+	length *= LENGTH_UNITS[ask_unit("축 길이 단위 (mm/m): ", LENGTH_UNITS)]
+	shear_modulus = ask_modulus("전단 탄성계수 G")
+	angle_rad = calculate_torsion_angle(torque, length, shear_modulus, polar)
+	print("회전각: {:.6g} rad ({:.6g} deg, 반시계 방향 +)".format(
+		angle_rad, math.degrees(angle_rad)
+	))
+
+
+def pressure_menu():
+	pressure_unit = ask_unit("압력 단위 (Pa/kPa/MPa): ", PRESSURE_UNITS)
+	pressure = ask_number("압력 p ({}): ".format(pressure_unit)) * PRESSURE_UNITS[pressure_unit]
+	outer = ask_positive("파이프 바깥 직경: ", "바깥 직경")
+	inner = ask_positive("파이프 안 직경: ", "안 직경")
+	length_unit = ask_unit("직경 단위 (mm/m): ", LENGTH_UNITS)
+	outer *= LENGTH_UNITS[length_unit]
+	inner *= LENGTH_UNITS[length_unit]
+	if inner >= outer:
+		raise ValueError("안 직경은 바깥 직경보다 작아야 합니다.")
+	radius = (outer + inner) / 4
+	thickness = (outer - inner) / 2
+	hoop, longitudinal = calculate_pipe_pressure(pressure, radius, thickness)
+	print_stress(abs(hoop), "원주방향 압력응력")
+	print_stress(abs(longitudinal), "길이방향 압력응력")
+
+
+class LegacyStressCalculatorApp:
+	"""재료역학 계산을 한 창에서 반복할 수 있는 GUI."""
+
+	MODES = ("축응력", "굽힘응력", "비틀림응력", "압력용기")
+
+	def __init__(self, root):
+		self.root = root
+		self.root.title("재료역학 응력 계산기")
+		self.root.geometry("620x620")
+		self.root.minsize(560, 520)
+		self.entries = {}
+		self.combos = {}
+
+		main_frame = ttk.Frame(root, padding=18)
+		main_frame.pack(fill="both", expand=True)
+		title = ttk.Label(main_frame, text="재료역학 응력 계산기", font=("맑은 고딕", 18, "bold"))
+		title.pack(anchor="w", pady=(0, 12))
+
+		mode_frame = ttk.Frame(main_frame)
+		mode_frame.pack(fill="x", pady=(0, 8))
+		ttk.Label(mode_frame, text="계산 종류").pack(side="left")
+		self.mode = tk.StringVar(value=self.MODES[0])
+		mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode, values=self.MODES, state="readonly", width=18)
+		mode_combo.pack(side="left", padx=10)
+		mode_combo.bind("<<ComboboxSelected>>", self.build_form)
+
+		self.form = ttk.LabelFrame(main_frame, text="입력", padding=12)
+		self.form.pack(fill="x", pady=(0, 10))
+		self.build_form()
+
+		button_frame = ttk.Frame(main_frame)
+		button_frame.pack(fill="x", pady=(0, 10))
+		ttk.Button(button_frame, text="계산", command=self.calculate).pack(side="left", padx=(0, 6))
+		ttk.Button(button_frame, text="초기화", command=self.reset).pack(side="left")
+
+		self.status = tk.StringVar(value="숫자와 단위를 입력한 뒤 계산을 누르세요.")
+		tk.Label(main_frame, textvariable=self.status, foreground="#b3261e", wraplength=570).pack(anchor="w", pady=(0, 6))
+		result_frame = ttk.LabelFrame(main_frame, text="계산 결과", padding=8)
+		result_frame.pack(fill="both", expand=True)
+		self.result = tk.Text(result_frame, height=8, state="disabled", wrap="word", font=("맑은 고딕", 10))
+		self.result.pack(fill="both", expand=True)
+
+	def build_form(self, _event=None):
+		for child in self.form.winfo_children():
+			child.destroy()
+		self.entries.clear()
+		self.combos.clear()
+
+		if self.mode.get() == "축응력":
+			self.add_input("force", "축력 P", FORCE_UNITS, "-100")
+			self.add_input("area", "단면적 A", AREA_UNITS, "200")
+		elif self.mode.get() == "굽힘응력":
+			self.add_input("moment", "굽힘모멘트 M", MOMENT_UNITS, "10")
+			self.add_input("inertia", "단면2차모멘트 I", {"mm4": 1e-12, "m4": 1.0}, "100000")
+			self.add_input("distance", "중립축 거리 c", LENGTH_UNITS, "10")
+		elif self.mode.get() == "비틀림응력":
+			self.add_input("torque", "토크 T", MOMENT_UNITS, "10")
+			self.add_input("polar", "극단면2차모멘트 J", {"mm4": 1e-12, "m4": 1.0}, "200000")
+			self.add_input("distance", "바깥 섬유 거리 c", LENGTH_UNITS, "10")
+			self.add_input("length", "축 길이 L", LENGTH_UNITS, "100")
+			self.add_input("modulus", "전단 탄성계수 G", MODULUS_UNITS, "80")
+		else:
+			self.add_input("pressure", "압력 p", PRESSURE_UNITS, "1")
+			self.add_input("radius", "평균 반지름 r", LENGTH_UNITS, "50")
+			self.add_input("thickness", "두께 t", LENGTH_UNITS, "5")
+
+	def add_input(self, key, label, units, default):
+		row = ttk.Frame(self.form)
+		row.pack(fill="x", pady=3)
+		ttk.Label(row, text=label, width=22, anchor="w").pack(side="left")
+		entry = ttk.Entry(row, width=16)
+		entry.insert(0, default)
+		entry.pack(side="left", padx=(0, 8))
+		combo = ttk.Combobox(row, values=tuple(units), state="readonly", width=10)
+		combo.current(0)
+		combo.pack(side="left")
+		self.entries[key] = entry
+		self.combos[key] = (combo, units)
+
+	def read_value(self, key, label):
+		raw = normalize_text(self.entries[key].get())
+		try:
+			value = float(raw)
+			if not math.isfinite(value) or abs(value) > MAX_ABS_VALUE:
+				raise ValueError
+		except ValueError:
+			raise ValueError("{}에 올바른 숫자를 입력하세요.".format(label))
+		unit_combo, units = self.combos[key]
+		return value * units[unit_combo.get()]
+
+	def calculate(self):
+		try:
+			mode = self.mode.get()
+			if mode == "축응력":
+				force = self.read_value("force", "축력")
+				area = positive(self.read_value("area", "단면적"), "단면적")
+				value = calculate_axial_stress(force, area)
+				text = "{}: {:.6g} MPa".format("인장" if value > 0 else "압축" if value < 0 else "응력", abs(value) / 1e6)
+			elif mode == "굽힘응력":
+				moment = self.read_value("moment", "굽힘모멘트")
+				inertia = positive(self.read_value("inertia", "단면2차모멘트"), "단면2차모멘트")
+				distance = positive(self.read_value("distance", "중립축 거리"), "중립축 거리")
+				value = calculate_bending_stress(moment * distance, inertia)
+				text = "굽힘응력: {:.6g} MPa".format(abs(value) / 1e6)
+			elif mode == "비틀림응력":
+				torque = self.read_value("torque", "토크")
+				polar = positive(self.read_value("polar", "극단면2차모멘트"), "극단면2차모멘트")
+				distance = positive(self.read_value("distance", "바깥 섬유 거리"), "바깥 섬유 거리")
+				length = positive(self.read_value("length", "축 길이"), "축 길이")
+				modulus = positive(self.read_value("modulus", "전단 탄성계수"), "전단 탄성계수")
+				stress = calculate_torsion_stress(torque * distance, polar)
+				angle = calculate_torsion_angle(torque, length, modulus, polar)
+				text = "비틀림 전단응력: {:.6g} MPa\n회전각: {:.6g} rad ({:.6g} deg)".format(abs(stress) / 1e6, angle, math.degrees(angle))
+			else:
+				pressure = self.read_value("pressure", "압력")
+				radius = positive(self.read_value("radius", "평균 반지름"), "평균 반지름")
+				thickness = positive(self.read_value("thickness", "두께"), "두께")
+				hoop, longitudinal = calculate_pipe_pressure(pressure, radius, thickness)
+				text = "원주방향 압력응력: {:.6g} MPa\n길이방향 압력응력: {:.6g} MPa".format(abs(hoop) / 1e6, abs(longitudinal) / 1e6)
+			self.status.set("계산이 완료되었습니다.")
+			self.append_result(text)
+		except ValueError as error:
+			self.status.set("입력 오류: {}".format(error))
+
+	def append_result(self, text):
+		self.result.configure(state="normal")
+		self.result.insert("end", text + "\n" + "-" * 48 + "\n")
+		self.result.see("end")
+		self.result.configure(state="disabled")
+
+	def reset(self):
+		self.build_form()
+		self.status.set("입력값을 초기화했습니다.")
+
+
+class ForceConverterApp:
+	"""한 창에서 힘의 단위를 반복 변환하는 GUI."""
+
+	def __init__(self, root):
+		self.root = root
+		self.root.title("힘 단위 변환기")
+		self.root.geometry("560x500")
+		self.root.minsize(500, 430)
+		main_frame = ttk.Frame(root, padding=20)
+		main_frame.pack(fill="both", expand=True)
+		ttk.Label(main_frame, text="힘 단위 변환기", font=("맑은 고딕", 20, "bold")).pack(anchor="w")
+		ttk.Label(main_frame, text="숫자와 단위를 선택한 뒤 변환하세요.").pack(anchor="w", pady=(4, 18))
+
+		input_frame = ttk.LabelFrame(main_frame, text="변환 입력", padding=14)
+		input_frame.pack(fill="x")
+		ttk.Label(input_frame, text="값", width=8, anchor="w").grid(row=0, column=0, pady=6)
+		self.value_entry = ttk.Entry(input_frame, width=16)
+		self.value_entry.insert(0, "1")
+		self.value_entry.grid(row=0, column=1, padx=8, pady=6)
+		self.from_unit = tk.StringVar(value="N")
+		self.to_unit = tk.StringVar(value="kN")
+		self.add_unit_combo(input_frame, self.from_unit, 2)
+		ttk.Label(input_frame, text="에서").grid(row=0, column=3, padx=8)
+		self.add_unit_combo(input_frame, self.to_unit, 4)
+
+		buttons = ttk.Frame(main_frame)
+		buttons.pack(fill="x", pady=14)
+		ttk.Button(buttons, text="변환", command=self.calculate).pack(side="left", padx=(0, 8))
+		tk.Button(buttons, text="단위 바꾸기", command=self.swap_units).pack(side="left", padx=(0, 8))
+		tk.Button(buttons, text="초기화", command=self.reset).pack(side="left")
+		self.status = tk.StringVar(value="1 N = 0.001 kN")
+		tk.Label(main_frame, textvariable=self.status, foreground="#b3261e", wraplength=500).pack(anchor="w", pady=(0, 8))
+		result_frame = ttk.LabelFrame(main_frame, text="변환 결과 및 이력", padding=8)
+		result_frame.pack(fill="both", expand=True)
+		self.result = tk.Text(result_frame, height=9, state="disabled", wrap="word", font=("맑은 고딕", 10))
+		self.result.pack(fill="both", expand=True)
+
+	def add_unit_combo(self, parent, variable, column):
+		combo = ttk.Combobox(parent, textvariable=variable, values=tuple(FORCE_UNITS), state="readonly", width=8)
+		combo.grid(row=0, column=column, pady=6)
+
+	def calculate(self):
+		try:
+			value = float(normalize_text(self.value_entry.get()))
+			if not math.isfinite(value) or abs(value) > MAX_ABS_VALUE:
+				raise ValueError
+			converted = convert_force(value, self.from_unit.get(), self.to_unit.get())
+		except ValueError:
+			self.status.set("입력 오류: 유한한 숫자를 입력하세요.")
+			return
+		text = "{} {} = {:.12g} {}".format(value, self.from_unit.get(), converted, self.to_unit.get())
+		self.status.set("변환이 완료되었습니다.")
+		self.result.configure(state="normal")
+		self.result.insert("end", text + "\n" + "-" * 42 + "\n")
+		self.result.see("end")
+		self.result.configure(state="disabled")
+
+	def swap_units(self):
+		old_from = self.from_unit.get()
+		self.from_unit.set(self.to_unit.get())
+		self.to_unit.set(old_from)
+		self.status.set("출발 단위와 도착 단위를 바꾸었습니다.")
+
+	def reset(self):
+		self.value_entry.delete(0, "end")
+		self.value_entry.insert(0, "1")
+		self.from_unit.set("N")
+		self.to_unit.set("kN")
+		self.status.set("입력값을 초기화했습니다.")
+
+
+def launch_gui():
+	root = tk.Tk()
+	ForceConverterApp(root)
+	root.mainloop()
+
+
+def main():
+	launch_gui()
+
+
+if __name__ == "__main__":
+	main()
+
+
