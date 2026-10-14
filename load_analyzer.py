@@ -20,8 +20,15 @@ def read_load_data(csv_path):
     with csv_path.open(newline="", encoding="utf-8") as csv_file:
         reader = csv.DictReader(csv_file)
 
-        if reader.fieldnames != EXPECTED_FIELDS:
-            raise ValueError("CSV 열 이름은 time_s와 force_N이어야 합니다.")
+        fieldnames = reader.fieldnames or []
+        missing_fields = [
+            field for field in EXPECTED_FIELDS if field not in fieldnames
+        ]
+        if missing_fields:
+            raise ValueError(
+                "CSV에 필요한 열이 없습니다: "
+                + ", ".join(missing_fields)
+            )
 
         data = []
         excluded_count = 0
